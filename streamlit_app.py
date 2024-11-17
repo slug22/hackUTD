@@ -173,6 +173,7 @@ def display_question_card(question: Dict, index: int) -> None:
                     is_correct = selected_letter == correct_answer
 
 
+
                     # Result and correct answer - wider
                     if is_correct:
                         st.success("✅ Correct!")
@@ -371,11 +372,10 @@ def main():
     with col2:
         st.markdown("""
             <div style="text-align: right; padding-top: 1rem;">
-                <a href="pages/Analytics.py" class="analytics-button">
-                    📈 Analytics
-                </a>
             </div>
         """, unsafe_allow_html=True)
+        if st.button("📈 Analytics"):
+            st.switch_page("pages/Analytics.py")
 
     if st.session_state.current_page == 'main':
         # Score input section
