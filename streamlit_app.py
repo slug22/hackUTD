@@ -25,6 +25,7 @@ SAMPLE_USA_RESULTS = {
     "Science": 21
 }
 
+# ... (previous imports remain the same)
 def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[List[Dict]]:
     """Generate questions using the LLaMA API directly in Streamlit."""
     try:
@@ -44,29 +45,36 @@ def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[Lis
         6. Specify the category (Reading/Math/Science/English)
         7. Specify the difficulty level (Easy/Medium/Hard)
 
-        Format each question as JSON with the following structure:
-        {{
-            "context": "Any necessary passage, equation, or background information...",
-            "question": "question text",
-            "options": {{
-                "A": "first option",
-                "B": "second option",
-                "C": "third option",
-                "D": "fourth option"
-            }},
-            "correct_option": "A",
-            "explanation": "explanation text",
-            "category": "subject category",
-            "difficulty": "difficulty level"
-        }}
+        Return the response in a valid JSON array format like this:
+        [
+            {{
+                "context": "Any necessary passage, equation, or background information...",
+                "question": "question text",
+                "options": {{
+                    "A": "first option",
+                    "B": "second option",
+                    "C": "third option",
+                    "D": "fourth option"
+                }},
+                "correct_option": "A",
+                "explanation": "explanation text",
+                "category": "subject category",
+                "difficulty": "difficulty level"
+            }}
+        ]
+
+        Make sure to respond with only valid JSON array containing all questions. Do not include any other text or formatting.
         """
+
+        # Debug: Print prompt
+        st.write("Sending prompt to API...")
 
         response = client.chat.completions.create(
             model='Meta-Llama-3.1-8B-Instruct',
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an educational assistant that generates targeted practice questions based on weaknesses and test performance analysis. Return responses in JSON format. Always include necessary context for questions."
+                    "content": "You are an educational assistant that generates ACT practice questions. Always return responses in valid JSON array format without any additional text or markdown formatting."
                 },
                 {"role": "user", "content": prompt}
             ],
@@ -74,23 +82,64 @@ def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[Lis
             max_tokens=2000
         )
 
-        # Extract and clean response content
+        # Get the response content
         response_content = response.choices[0].message.content
-        cleaned_content = response_content
+
+        # Debug: Show raw response
+        st.write("Raw API response:", response_content)
+
+        # Clean the response content
+        cleaned_content = response_content.strip()
+        
+        # Remove any potential markdown formatting
         if "```json" in cleaned_content:
             cleaned_content = cleaned_content.split("```json")[1]
         if "```" in cleaned_content:
             cleaned_content = cleaned_content.split("```")[0]
-
-        cleaned_content = cleaned_content.strip()
-        questions = json.loads(cleaned_content)
         
-        return questions
+        # Remove any leading/trailing whitespace or newlines
+        cleaned_content = cleaned_content.strip()
+
+        # Debug: Show cleaned content
+        st.write("Cleaned content:", cleaned_content)
+
+        # Parse JSON
+        try:
+            questions = json.loads(cleaned_content)
+            
+            # Verify questions format
+            if not isinstance(questions, list):
+                st.error("API response is not a list of questions")
+                return None
+                
+            # Validate each question
+            valid_questions = []
+            required_fields = {"context", "question", "options", "correct_option", "explanation", "category", "difficulty"}
+            
+            for q in questions:
+                if all(field in q for field in required_fields):
+                    valid_questions.append(q)
+                else:
+                    st.warning(f"Skipping invalid question format: {q}")
+            
+            if not valid_questions:
+                st.error("No valid questions found in response")
+                return None
+                
+            return valid_questions
+
+        except json.JSONDecodeError as e:
+            st.error(f"Failed to parse JSON: {str(e)}")
+            st.write("Position of error:", e.pos)
+            st.write("Line number:", e.lineno)
+            st.write("Column number:", e.colno)
+            return None
 
     except Exception as e:
         st.error(f"Error generating questions: {str(e)}")
         return None
 
+# ... (rest of the code remains the same)
 def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> dict:
     """Save question response data to Pinata."""
     JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI4YmVmMTM1YS03NDY2LTQ1MjQtODhjMy00MGYzNzg2NmViZDciLCJlbWFpbCI6InNpbW9uZ2FnZTBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImZhNjUxNWZkOTRkMDMyZGQwN2QzIiwic2NvcGVkS2V5U2VjcmV0IjoiOWUyZTRiOTE4NDVjMDA4OWE3YzM0NDdhZDVhZDJkZTAyMTdkNGM5MjExOTI2ODEyZDZmMWRkMDlmYmU2ODA4NCIsImV4cCI6MTc2MzM1NzkxNH0.zpWQXD9YWbE6BKiBavUtGyZJJkrEiZ4x0j1zxzgpmJs"
