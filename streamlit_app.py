@@ -15,6 +15,9 @@ if 'questions' not in st.session_state:
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'main'
 
+if 'question_set_number' not in st.session_state:
+    st.session_state.question_set_number = 1
+
 
 def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> dict:
     """
@@ -29,7 +32,8 @@ def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> d
         "timestamp": timestamp,
         "subject": category,
         "difficulty": difficulty,
-        "correct": is_correct
+        "correct": is_correct,
+        "set_number": st.session_state.question_set_number
     }
 
     # Create 'data' directory if it doesn't exist
@@ -95,6 +99,13 @@ def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> d
         files['file'][1].close()
 
 
+def next_question_set():
+    """Generate a new set of questions and increment the set number."""
+    st.session_state.question_set_number += 1
+    st.session_state.questions = generate_questions(
+        st.session_state.personal_data,
+        st.session_state.regional_data
+    )
 
 
 def display_question_card(question: Dict, index: int) -> None:
@@ -178,6 +189,13 @@ def display_questions_grid(questions: List[Dict]) -> None:
             with col2:
                 display_question_card(questions[second_idx], second_idx)
 
+    # Add Next button after all questions
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Next Questions ➡️", key="next_questions"):
+            next_question_set()
+            st.rerun()
+
 
 def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[List[Dict]]:
     """Make API call to generate questions."""
@@ -255,6 +273,7 @@ def main():
                 "Science": st.slider("Science", 0, 36, 18),
                 "English": st.slider("English", 0, 36, 18)
             }
+            st.session_state.regional_data = regional_data
 
         with col2:
             st.header("Your Scores")
@@ -264,6 +283,7 @@ def main():
                 "Science": st.slider("Science", 0, 36, 13),
                 "English": st.slider("English", 0, 36, 13)
             }
+        st.session_state.personal_data = personal_data
 
         # Generate questions button
         if st.button("Generate Questions", type="primary"):
@@ -278,12 +298,7 @@ def main():
             st.markdown("## Practice Questions")
             display_questions_grid(st.session_state.questions)
 
-            if st.button("Reset All Answers"):
-                with st.spinner("Generating questions..."):
-                    questions = generate_questions(personal_data, regional_data)
-                    if questions:
-                        st.session_state.questions = questions
-                        st.success("Questions generated successfully!")
+
 
     # Backend status in sidebar
     try:
