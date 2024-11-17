@@ -169,6 +169,8 @@ def display_question_card(question: Dict, index: int) -> None:
                 st.info(f"**Explanation:** {question.get('explanation', 'No explanation provided.')}")
 
                 save_response_to_json(category, difficulty, is_correct)
+    except Exception as e:
+        st.error(f"Error displaying question: {str(e)}")
 
 def main():
     st.set_page_config(page_title="ACT Practice Questions", layout="wide")
