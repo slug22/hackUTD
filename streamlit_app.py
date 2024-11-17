@@ -1,257 +1,98 @@
 import streamlit as st
-import requests
 import json
-from typing import Dict, List, Optional
-from math import ceil
-from datetime import datetime
+import openai
 import os
+from typing import Dict, List, Optional
+from datetime import datetime
+import requests
+from dotenv import load_dotenv
 
-from app import generate_questions
+# Load environment variables
+load_dotenv()
 
-# Initialize session state
-if 'questions' not in st.session_state:
-    st.session_state.questions = []
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 'main'
-if 'question_set_number' not in st.session_state:
-    st.session_state.question_set_number = 1
+# Configure OpenAI client for SambaNova
+SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY", "cf134cde-f4d2-4e6d-90b4-500e269eb286")
+client = openai.OpenAI(
+    api_key=SAMBANOVA_API_KEY,
+    base_url="https://api.sambanova.ai/v1"
+)
 
-# Enhanced CSS styling
-st.set_page_config(page_title="ACT Practice Questions", layout="wide")
-st.markdown("""
-    <style>
-        /* Main layout and typography */
-        .main {
-            padding: 2rem;
-        }
-        h1, h2, h3 {
-            color: #5180c9;
-            font-weight: 600;
-        }
+# Sample USA results for comparison
+SAMPLE_USA_RESULTS = {
+    "English": 21,
+    "Mathematics": 21,
+    "Reading": 21,
+    "Science": 21
+}
 
-        /* Custom container styling */
-        .css-1d391kg {
-            padding: 2rem 1rem;
-        }
-
-        /* Score input containers */
-        .scores-container {
-            background-color: rgba(31, 111, 235, 0.05);
-            border-radius: 10px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        /* Button styling */
-        div.stButton > button {
-            width: 100%;
-            height: 3rem;
-            background: linear-gradient(90deg, #5180c9 0%, #2ea5ff 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-        div.stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(31, 111, 235, 0.2);
-        }
-
-        /* Question card styling */
-        .question-card {
-            background: linear-gradient(145deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.1) 100%);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 1.5rem;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-
-        /* Radio button styling */
-        .stRadio > label {
-            font-weight: 500;
-            color: #e6edf3;
-        }
-
-        /* Alert/message styling */
-        .stAlert {
-            padding: 1rem;
-            border-radius: 8px;
-            margin: 1rem 0;
-        }
-        .stSuccess {
-            background-color: rgba(46, 160, 67, 0.1);
-            border: 1px solid rgba(46, 160, 67, 0.2);
-        }
-        .stError {
-            background-color: rgba(248, 81, 73, 0.1);
-            border: 1px solid rgba(248, 81, 73, 0.2);
-        }
-        .stInfo {
-            background-color: rgba(31, 111, 235, 0.1);
-            border: 1px solid rgba(31, 111, 235, 0.2);
-        }
-
-        /* Slider styling */
-        .stSlider > div > div > div {
-           
-        }
-        .stSlider > div > div > div > div {
-            background-color: #ffffff;
-        }
-
-        /* Analytics button styling */
-        .analytics-button {
-            background-color: #238636;
-            color: white;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.2s ease;
-        }
-        .analytics-button:hover {
-            background-color: #2ea043;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-
-def display_question_card(question: Dict, index: int) -> None:
-    """Display an enhanced question card with wider centered feedback."""
+def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[List[Dict]]:
+    """Generate questions using the LLaMA API directly in Streamlit."""
     try:
-        st.markdown(f"""
-            <div class="question-card">
-                <h3 style="margin-bottom: 1rem;">Question {index + 1}</h3>
-                <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
-                    <span class="badge" style="background-color: rgba(31, 111, 235, 0.1); color: #1f6feb; padding: 0.3rem 0.8rem; border-radius: 1rem;">
-                        {question.get('category', 'Unknown')}
-                    </span>
-                    <span class="badge" style="background-color: rgba(46, 160, 67, 0.1); color: #2ea043; padding: 0.3rem 0.8rem; border-radius: 1rem;">
-                        {question.get('difficulty', 'Unknown')}
-                    </span>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
+        prompt = f"""
+        Given the following test results:
+        User ACT Results: {personal_data}
+        Regional ACT Results: {regional_data}
+        USA Median ACT Results: {SAMPLE_USA_RESULTS}
 
-        # Question content container - made wider
-        st.markdown("""
-            <div style="max-width: 800px; margin: 0 auto;">
-        """, unsafe_allow_html=True)
+        Generate 4 ACT-style multiple choice practice questions, one for each subject, focusing on areas needing improvement.
+        For each question:
+        1. Include any necessary context (passages, equations, diagrams described in text, etc.) before the question
+        2. Provide the actual question
+        3. Include four multiple choice options (A, B, C, D)
+        4. Indicate the correct answer
+        5. Provide a detailed explanation
+        6. Specify the category (Reading/Math/Science/English)
+        7. Specify the difficulty level (Easy/Medium/Hard)
 
-        context = question.get('context', '').strip()
-        if context:
-            st.markdown(f"""
-                <div style="background-color: rgba(255, 255, 255, 0.05); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
-                    <strong>Context:</strong><br>
-                    <em>{context}</em>
-                </div>
-            """, unsafe_allow_html=True)
+        Format each question as JSON with the following structure:
+        {{
+            "context": "Any necessary passage, equation, or background information...",
+            "question": "question text",
+            "options": {{
+                "A": "first option",
+                "B": "second option",
+                "C": "third option",
+                "D": "fourth option"
+            }},
+            "correct_option": "A",
+            "explanation": "explanation text",
+            "category": "subject category",
+            "difficulty": "difficulty level"
+        }}
+        """
 
-        st.markdown(f"**{question.get('question', '')}**")
+        response = client.chat.completions.create(
+            model='Meta-Llama-3.1-8B-Instruct',
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an educational assistant that generates targeted practice questions based on weaknesses and test performance analysis. Return responses in JSON format. Always include necessary context for questions."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
 
-        options = question.get('options', {})
-        if isinstance(options, dict) and options:
-            formatted_options = [f"{k}: {v}" for k, v in options.items()]
-            answer_key = f"answer_{index}"
+        # Extract and clean response content
+        response_content = response.choices[0].message.content
+        cleaned_content = response_content
+        if "```json" in cleaned_content:
+            cleaned_content = cleaned_content.split("```json")[1]
+        if "```" in cleaned_content:
+            cleaned_content = cleaned_content.split("```")[0]
 
-            # Container for radio buttons
-            with st.container():
-                choice = st.radio("Select your answer:", formatted_options, key=answer_key)
-
-            # Close the question content container
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # Wider columns for submit button
-            col1, col2, col3 = st.columns([1, 4, 1])
-            with col2:
-                if st.button("Submit Answer", key=f"submit_{index}"):
-                    correct_answer = question.get('correct_option')
-                    selected_letter = choice.split(":")[0] if choice else None
-                    is_correct = selected_letter == correct_answer
-
-
-                    # Result and correct answer - wider
-                    if is_correct:
-                        st.success("✅ Correct!")
-                    else:
-                        st.error(f"❌ Incorrect")
-                        st.markdown(f"""
-                            <div style="
-                                width: 120%;
-                                margin: 1rem auto;
-                                padding: 0.75rem;
-                                background-color: rgba(31, 111, 235, 0.05);
-                                border-radius: 8px;
-                                border: 1px solid rgba(31, 111, 235, 0.1);">
-                                <strong>Correct Answer:</strong> {correct_answer}
-                            </div>
-                        """, unsafe_allow_html=True)
-
-                    # Explanation section - wider
-                    st.markdown("""
-                        <div style="
-                            width: 120%;
-                            margin: 1rem auto;
-                            padding: 1.5rem;
-                            background-color: rgba(31, 111, 235, 0.05);
-                            border-radius: 8px;
-                            border: 1px solid rgba(31, 111, 235, 0.1);
-                            text-align: left;">
-                            <strong>Explanation:</strong><br><br>
-                            {}
-                        </div>
-                    """.format(question.get('explanation', 'No explanation provided.')), unsafe_allow_html=True)
-
-                    # Close the feedback container
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                    save_response_to_json(question.get('category', 'Unknown'),
-                                       question.get('difficulty', 'Unknown'),
-                                       is_correct)
+        cleaned_content = cleaned_content.strip()
+        questions = json.loads(cleaned_content)
+        
+        return questions
 
     except Exception as e:
-        st.error(f"Error displaying question: {str(e)}")
-        st.write("Raw question data:", question)
-
-def display_questions_grid(questions: List[Dict]) -> None:
-    """Display questions in a responsive grid layout with enhanced spacing."""
-    num_questions = len(questions)
-    num_rows = ceil(num_questions / 2)
-
-    # Add some spacing before questions
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    for row in range(num_rows):
-        col1, col2 = st.columns(2)
-
-        first_idx = row * 2
-        if first_idx < num_questions:
-            with col1:
-                display_question_card(questions[first_idx], first_idx)
-
-        second_idx = row * 2 + 1
-        if second_idx < num_questions:
-            with col2:
-                display_question_card(questions[second_idx], second_idx)
-
-    # Add Next button after all questions
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        if st.button("Next Questions ➡️", key="next_questions"):
-            next_question_set()
-            st.rerun()
-
+        st.error(f"Error generating questions: {str(e)}")
+        return None
 
 def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> dict:
-    """
-    Save question response data to a JSON file and upload to Pinata.
-    Returns the Pinata upload response.
-    """
-    # Your JWT token
+    """Save question response data to Pinata."""
     JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI4YmVmMTM1YS03NDY2LTQ1MjQtODhjMy00MGYzNzg2NmViZDciLCJlbWFpbCI6InNpbW9uZ2FnZTBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImZhNjUxNWZkOTRkMDMyZGQwN2QzIiwic2NvcGVkS2V5U2VjcmV0IjoiOWUyZTRiOTE4NDVjMDA4OWE3YzM0NDdhZDVhZDJkZTAyMTdkNGM5MjExOTI2ODEyZDZmMWRkMDlmYmU2ODA4NCIsImV4cCI6MTc2MzM1NzkxNH0.zpWQXD9YWbE6BKiBavUtGyZJJkrEiZ4x0j1zxzgpmJs"
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -260,194 +101,115 @@ def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> d
         "subject": category,
         "difficulty": difficulty,
         "correct": is_correct,
-        "set_number": st.session_state.question_set_number
+        "set_number": st.session_state.get('question_set_number', 1)
     }
-
-    # Create 'data' directory if it doesn't exist
-    if not os.path.exists('data'):
-        os.makedirs('data')
-
-    filename = 'data/question_responses.json'
-
-    # Read existing data
-    try:
-        with open(filename, 'r') as f:
-            responses = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        responses = []
-
-    # Append new response
-    responses.append(response_data)
-
-    # Write updated data to file
-    with open(filename, 'w') as f:
-        json.dump(responses, f, indent=4)
 
     # Prepare to upload to Pinata
-    url = "https://api.pinata.cloud/pinning/pinFileToIPFS"
-
+    url = "https://api.pinata.cloud/pinning/pinJSONToIPFS"
     headers = {
-        "Authorization": f"Bearer {JWT_TOKEN}"
-    }
-
-    # Create the file payload
-    files = {
-        'file': ('question_responses.json', open(filename, 'rb'), 'application/json')
-    }
-
-    # Add metadata
-    payload = {
-        'pinataMetadata': {
-            'name': 'question_responses.json',
-            'keyvalues': {
-                'timestamp': timestamp
-            }
-        }
+        "Authorization": f"Bearer {JWT_TOKEN}",
+        "Content-Type": "application/json"
     }
 
     try:
         response = requests.post(
             url,
-            files=files,
             headers=headers,
-            data={'pinataMetadata': json.dumps(payload['pinataMetadata'])}
+            json=response_data
         )
         response.raise_for_status()
-
-        print(f"File uploaded successfully to Pinata. CID: {response.json().get('IpfsHash')}")
-        with open(filename, 'w') as f:
-            json.dump([], f)
         return response.json()
-
     except Exception as e:
-        print(f"Error uploading to Pinata: {e}")
+        st.error(f"Error uploading to Pinata: {e}")
         return {"error": str(e)}
-    finally:
-        files['file'][1].close()
 
-
-def next_question_set():
-    """Generate a new set of questions and increment the set number."""
-    st.session_state.question_set_number += 1
-    st.session_state.questions = generate_questions(
-        st.session_state.personal_data,
-        st.session_state.regional_data
-    )
-
-
-def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[List[Dict]]:
-    """Make API call to generate questions."""
+def display_question_card(question: Dict, index: int) -> None:
+    """Display an individual question card with interactive elements."""
     try:
-        response = requests.post(
-            "http://localhost:5000/generate-questions",
-            json={
-                "user_results": personal_data,
-                "regional_results": regional_data
-            },
-            headers={"Content-Type": "application/json"}
-        )
+        category = question.get('category', 'Unknown')
+        difficulty = question.get('difficulty', 'Unknown')
+        context = question.get('context', '').strip()
+        question_text = question.get('question', '')
+        options = question.get('options', {})
 
-        if response.status_code == 200:
-            return response.json().get('questions', [])
-        else:
-            st.error(f"API Error: {response.json().get('message', 'Unknown error')}")
-            return None
+        st.markdown(f"""
+            <div style='
+                border: 2px solid rgba(255, 255, 255, 0.8);
+                border-radius: 10px;
+                padding: 1.5rem;
+                margin-bottom: 1rem;
+                background-color: rgba(255, 255, 255, 0.1);
+            '>
+                <h3>Question {index + 1}</h3>
+                <p><strong>Category:</strong> {category} | 
+                <strong>Difficulty:</strong> {difficulty}</p>
+            </div>
+        """, unsafe_allow_html=True)
 
-    except requests.exceptions.ConnectionError:
-        st.error("Could not connect to the backend server. Please make sure it's running.")
-        return None
-    except Exception as e:
-        st.error(f"Error generating questions: {str(e)}")
-        return None
+        if context:
+            st.markdown("**Context:**")
+            st.markdown(f"*{context}*")
 
+        st.write(f"**{question_text}**")
 
+        if isinstance(options, dict) and options:
+            formatted_options = [f"{k}: {v}" for k, v in options.items()]
+            answer_key = f"answer_{index}"
+            choice = st.radio("Select your answer:", formatted_options, key=answer_key)
+
+            if st.button("Submit Answer", key=f"submit_{index}"):
+                correct_answer = question.get('correct_option')
+                selected_letter = choice.split(":")[0] if choice else None
+                is_correct = selected_letter == correct_answer
+
+                if is_correct:
+                    st.success("✅ Correct!")
+                else:
+                    st.error(f"❌ Incorrect. The correct answer is {correct_answer}")
+                st.info(f"**Explanation:** {question.get('explanation', 'No explanation provided.')}")
+
+                save_response_to_json(category, difficulty, is_correct)
 
 def main():
-    """Enhanced main application logic with improved layout."""
-    # Header section with navigation
-    col1, col2 = st.columns([4, 1])
+    st.set_page_config(page_title="ACT Practice Questions", layout="wide")
+
+    st.title("ACT Practice Question Generator")
+
+    # Create two columns for scores input
+    col1, col2 = st.columns(2)
+
     with col1:
-        st.title("📚 ACT Practice Question Generator")
+        st.header("Regional Scores")
+        regional_data = {
+            "Mathematics": st.slider("Math (Regional)", 0, 36, 18, key="reg_math"),
+            "Reading": st.slider("Reading (Regional)", 0, 36, 18, key="reg_read"),
+            "Science": st.slider("Science (Regional)", 0, 36, 18, key="reg_sci"),
+            "English": st.slider("English (Regional)", 0, 36, 18, key="reg_eng")
+        }
+
     with col2:
-        st.markdown("""
-            <div style="text-align: right; padding-top: 1rem;">
-                <a href="pages/Analytics.py" class="analytics-button">
-                    📈 Analytics
-                </a>
-            </div>
-        """, unsafe_allow_html=True)
+        st.header("Your Scores")
+        personal_data = {
+            "Mathematics": st.slider("Math (Personal)", 0, 36, 13, key="pers_math"),
+            "Reading": st.slider("Reading (Personal)", 0, 36, 13, key="pers_read"),
+            "Science": st.slider("Science (Personal)", 0, 36, 13, key="pers_sci"),
+            "English": st.slider("English (Personal)", 0, 36, 13, key="pers_eng")
+        }
 
-    if st.session_state.current_page == 'main':
-        # Score input section
-        st.markdown("""
-            <div class="scores-container">
-                <h2 style="margin-bottom: 1.5rem;">Score Information</h2>
-            </div>
-        """, unsafe_allow_html=True)
+    if st.button("Generate Questions", type="primary"):
+        with st.spinner("Generating questions..."):
+            questions = generate_questions(personal_data, regional_data)
+            if questions:
+                st.session_state.questions = questions
+                st.success("Questions generated successfully!")
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("### 📊 Regional Scores")
-            regional_data = {
-                "Mathematics": st.slider("Math", 0, 36, 18, key="reg_math"),
-                "Reading": st.slider("Reading", 0, 36, 18, key="reg_read"),
-                "Science": st.slider("Science", 0, 36, 18, key="reg_sci"),
-                "English": st.slider("English", 0, 36, 18, key="reg_eng")
-            }
-            st.session_state.regional_data = regional_data
-
-        with col2:
-            st.markdown("### 🎯 Your Scores")
-            personal_data = {
-                "Mathematics": st.slider("Math", 0, 36, 13, key="per_math"),
-                "Reading": st.slider("Reading", 0, 36, 13, key="per_read"),
-                "Science": st.slider("Science", 0, 36, 13, key="per_sci"),
-                "English": st.slider("English", 0, 36, 13, key="per_eng")
-            }
-            st.session_state.personal_data = personal_data
-
-        # Generate questions button
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🎲 Generate Questions", type="primary"):
-            with st.spinner("Creating your personalized questions..."):
-                questions = generate_questions(personal_data, regional_data)
-                if questions:
-                    st.session_state.questions = questions
-                    st.success("✨ Questions generated successfully!")
-
-        # Display questions
-        if st.session_state.questions:
-            st.markdown("## 📝 Practice Questions")
-            display_questions_grid(st.session_state.questions)
-
-    # Backend status in sidebar with improved styling
-    with st.sidebar:
-        st.markdown("### System Status")
-        try:
-            health_response = requests.get("http://localhost:5000/health")
-            if health_response.status_code == 200:
-                st.markdown("""
-                    <div style="background-color: rgba(46, 160, 67, 0.1); padding: 0.8rem; border-radius: 8px; display: flex; align-items: center;">
-                        <span style="color: #2ea043; margin-right: 0.5rem;">●</span>
-                        Backend: Connected
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                    <div style="background-color: rgba(248, 81, 73, 0.1); padding: 0.8rem; border-radius: 8px; display: flex; align-items: center;">
-                        <span style="color: #f85149; margin-right: 0.5rem;">●</span>
-                        Backend: Error
-                    </div>
-                """, unsafe_allow_html=True)
-        except Exception as e:
-            st.markdown("""
-                <div style="background-color: rgba(248, 81, 73, 0.1); padding: 0.8rem; border-radius: 8px; display: flex; align-items: center;">
-                    <span style="color: #f85149; margin-right: 0.5rem;">●</span>
-                    Backend: Not Connected
-                </div>
-            """, unsafe_allow_html=True)
-
+    # Display questions if they exist
+    if 'questions' in st.session_state and st.session_state.questions:
+        st.markdown("## Practice Questions")
+        for i, question in enumerate(st.session_state.questions):
+            display_question_card(question, i)
 
 if __name__ == "__main__":
+    if 'question_set_number' not in st.session_state:
+        st.session_state.question_set_number = 1
     main()
