@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import requests
 from dotenv import load_dotenv
+from math import ceil
 
 # Load environment variables
 load_dotenv()
@@ -25,7 +26,102 @@ SAMPLE_USA_RESULTS = {
     "Science": 21
 }
 
-# ... (previous imports remain the same)
+def next_question_set():
+    """Generate a new set of questions and increment the set number."""
+    st.session_state.question_set_number += 1
+    st.session_state.questions = generate_questions(
+        st.session_state.personal_data,
+        st.session_state.regional_data
+    )
+
+def display_question_card(question: Dict, index: int) -> None:
+    """Display an individual question card with interactive elements."""
+    try:
+        # Extract necessary details
+        category = question.get('category', 'Unknown')
+        difficulty = question.get('difficulty', 'Unknown')
+        context = question.get('context', '').strip()
+        question_text = question.get('question', '')
+        options = question.get('options', {})
+
+        # Create a card layout for the question
+        st.markdown(f"""
+            <div style='
+                border: 2px solid rgba(255, 255, 255, 0.8);
+                border-radius: 10px;
+                padding: 1.5rem;
+                margin-bottom: 1rem;
+                background-color: rgba(255, 255, 255, 0.1);
+            '>
+                <h3>Question {index + 1}</h3>
+                <p><strong>Category:</strong> {category} | 
+                <strong>Difficulty:</strong> {difficulty}</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Display context if available
+        if context:
+            st.markdown("**Context:**")
+            st.markdown(f"*{context}*")
+
+        # Display question
+        st.write(f"**{question_text}**")
+
+        # Handle options and user selection
+        if isinstance(options, dict) and options:
+            formatted_options = [f"{k}: {v}" for k, v in options.items()]
+            answer_key = f"answer_{index}"
+            choice = st.radio("Select your answer:", formatted_options, key=answer_key)
+
+            # Submit button
+            if st.button("Submit Answer", key=f"submit_{index}"):
+                correct_answer = question.get('correct_option')
+                selected_letter = choice.split(":")[0] if choice else None
+                is_correct = selected_letter == correct_answer
+
+                if is_correct:
+                    st.success("✅ Correct!")
+                else:
+                    st.error(f"❌ Incorrect. The correct answer is {correct_answer}")
+                st.info(f"**Explanation:** {question.get('explanation', 'No explanation provided.')}")
+
+                # Save response data to JSON
+                save_response_to_json(category, difficulty, is_correct)
+        else:
+            st.error("Invalid question format")
+
+        # Close the div after all content is added
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"Error displaying question: {str(e)}")
+        st.write("Raw question data:", question)
+
+def display_questions_grid(questions: List[Dict]) -> None:
+    """Display questions in a responsive grid layout."""
+    num_questions = len(questions)
+    num_rows = ceil(num_questions / 2)
+
+    for row in range(num_rows):
+        col1, col2 = st.columns(2)
+
+        first_idx = row * 2
+        if first_idx < num_questions:
+            with col1:
+                display_question_card(questions[first_idx], first_idx)
+
+        second_idx = row * 2 + 1
+        if second_idx < num_questions:
+            with col2:
+                display_question_card(questions[second_idx], second_idx)
+
+    # Add Next button after all questions
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        if st.button("Next Questions ➡️", key="next_questions"):
+            next_question_set()
+            st.rerun()
+
 def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[List[Dict]]:
     """Generate questions using the LLaMA API directly in Streamlit."""
     try:
@@ -62,12 +158,7 @@ def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[Lis
                 "difficulty": "difficulty level"
             }}
         ]
-
-        Make sure to respond with only valid JSON array containing all questions. Do not include any other text or formatting.
         """
-
-        # Debug: Print prompt
-        st.write("Sending prompt to API...")
 
         response = client.chat.completions.create(
             model='Meta-Llama-3.1-8B-Instruct',
@@ -82,64 +173,27 @@ def generate_questions(personal_data: Dict, regional_data: Dict) -> Optional[Lis
             max_tokens=2000
         )
 
-        # Get the response content
-        response_content = response.choices[0].message.content
-
-        # Debug: Show raw response
-        st.write("Raw API response:", response_content)
-
-        # Clean the response content
-        cleaned_content = response_content.strip()
+        # Get and clean the response content
+        response_content = response.choices[0].message.content.strip()
         
-        # Remove any potential markdown formatting
-        if "```json" in cleaned_content:
-            cleaned_content = cleaned_content.split("```json")[1]
-        if "```" in cleaned_content:
-            cleaned_content = cleaned_content.split("```")[0]
-        
-        # Remove any leading/trailing whitespace or newlines
-        cleaned_content = cleaned_content.strip()
-
-        # Debug: Show cleaned content
-        st.write("Cleaned content:", cleaned_content)
-
         # Parse JSON
         try:
-            questions = json.loads(cleaned_content)
-            
-            # Verify questions format
+            questions = json.loads(response_content)
             if not isinstance(questions, list):
                 st.error("API response is not a list of questions")
                 return None
-                
-            # Validate each question
-            valid_questions = []
-            required_fields = {"context", "question", "options", "correct_option", "explanation", "category", "difficulty"}
-            
-            for q in questions:
-                if all(field in q for field in required_fields):
-                    valid_questions.append(q)
-                else:
-                    st.warning(f"Skipping invalid question format: {q}")
-            
-            if not valid_questions:
-                st.error("No valid questions found in response")
-                return None
-                
-            return valid_questions
+
+            return questions
 
         except json.JSONDecodeError as e:
             st.error(f"Failed to parse JSON: {str(e)}")
-            st.write("Position of error:", e.pos)
-            st.write("Line number:", e.lineno)
-            st.write("Column number:", e.colno)
+            st.write("Raw response:", response_content)
             return None
 
     except Exception as e:
         st.error(f"Error generating questions: {str(e)}")
         return None
 
-# ... (rest of the code remains the same)
 def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> dict:
     """Save question response data to Pinata."""
     JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI4YmVmMTM1YS03NDY2LTQ1MjQtODhjMy00MGYzNzg2NmViZDciLCJlbWFpbCI6InNpbW9uZ2FnZTBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImZhNjUxNWZkOTRkMDMyZGQwN2QzIiwic2NvcGVkS2V5U2VjcmV0IjoiOWUyZTRiOTE4NDVjMDA4OWE3YzM0NDdhZDVhZDJkZTAyMTdkNGM5MjExOTI2ODEyZDZmMWRkMDlmYmU2ODA4NCIsImV4cCI6MTc2MzM1NzkxNH0.zpWQXD9YWbE6BKiBavUtGyZJJkrEiZ4x0j1zxzgpmJs"
@@ -153,7 +207,6 @@ def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> d
         "set_number": st.session_state.get('question_set_number', 1)
     }
 
-    # Prepare to upload to Pinata
     url = "https://api.pinata.cloud/pinning/pinJSONToIPFS"
     headers = {
         "Authorization": f"Bearer {JWT_TOKEN}",
@@ -172,55 +225,6 @@ def save_response_to_json(category: str, difficulty: str, is_correct: bool) -> d
         st.error(f"Error uploading to Pinata: {e}")
         return {"error": str(e)}
 
-def display_question_card(question: Dict, index: int) -> None:
-    """Display an individual question card with interactive elements."""
-    try:
-        category = question.get('category', 'Unknown')
-        difficulty = question.get('difficulty', 'Unknown')
-        context = question.get('context', '').strip()
-        question_text = question.get('question', '')
-        options = question.get('options', {})
-
-        st.markdown(f"""
-            <div style='
-                border: 2px solid rgba(255, 255, 255, 0.8);
-                border-radius: 10px;
-                padding: 1.5rem;
-                margin-bottom: 1rem;
-                background-color: rgba(255, 255, 255, 0.1);
-            '>
-                <h3>Question {index + 1}</h3>
-                <p><strong>Category:</strong> {category} | 
-                <strong>Difficulty:</strong> {difficulty}</p>
-            </div>
-        """, unsafe_allow_html=True)
-
-        if context:
-            st.markdown("**Context:**")
-            st.markdown(f"*{context}*")
-
-        st.write(f"**{question_text}**")
-
-        if isinstance(options, dict) and options:
-            formatted_options = [f"{k}: {v}" for k, v in options.items()]
-            answer_key = f"answer_{index}"
-            choice = st.radio("Select your answer:", formatted_options, key=answer_key)
-
-            if st.button("Submit Answer", key=f"submit_{index}"):
-                correct_answer = question.get('correct_option')
-                selected_letter = choice.split(":")[0] if choice else None
-                is_correct = selected_letter == correct_answer
-
-                if is_correct:
-                    st.success("✅ Correct!")
-                else:
-                    st.error(f"❌ Incorrect. The correct answer is {correct_answer}")
-                st.info(f"**Explanation:** {question.get('explanation', 'No explanation provided.')}")
-
-                save_response_to_json(category, difficulty, is_correct)
-    except Exception as e:
-        st.error(f"Error displaying question: {str(e)}")
-
 def main():
     st.set_page_config(page_title="ACT Practice Questions", layout="wide")
 
@@ -237,6 +241,7 @@ def main():
             "Science": st.slider("Science (Regional)", 0, 36, 18, key="reg_sci"),
             "English": st.slider("English (Regional)", 0, 36, 18, key="reg_eng")
         }
+        st.session_state.regional_data = regional_data
 
     with col2:
         st.header("Your Scores")
@@ -246,6 +251,7 @@ def main():
             "Science": st.slider("Science (Personal)", 0, 36, 13, key="pers_sci"),
             "English": st.slider("English (Personal)", 0, 36, 13, key="pers_eng")
         }
+        st.session_state.personal_data = personal_data
 
     if st.button("Generate Questions", type="primary"):
         with st.spinner("Generating questions..."):
@@ -257,8 +263,7 @@ def main():
     # Display questions if they exist
     if 'questions' in st.session_state and st.session_state.questions:
         st.markdown("## Practice Questions")
-        for i, question in enumerate(st.session_state.questions):
-            display_question_card(question, i)
+        display_questions_grid(st.session_state.questions)
 
 if __name__ == "__main__":
     if 'question_set_number' not in st.session_state:
