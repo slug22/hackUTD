@@ -1,192 +1,224 @@
 import streamlit as st
 import json
 import pandas as pd
-from datetime import datetime
-
-st.set_page_config(page_title="Analytics", page_icon="📈")
-
-
-def load_question_responses():
-    """Load and parse the question responses from the JSON file."""
-    try:
-        with open('data/question_responses.json', 'r') as f:
-            data = json.load(f)
-            # If the data is a dictionary (single response), convert to list
-            if isinstance(data, dict):
-                return [data]
-            return data if isinstance(data, list) else []
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+import requests
 
 def load_initial_scores():
     """Load initial personal scores from the session state."""
+    return {
+        'Mathematics': 13,
+        'Reading': 13,
+        'Science': 13,
+        'English': 13
+    }
+
+def get_pinata_questions(jwt_token: str) -> List[Dict]:
+    """Retrieve questions from Pinata."""
+    url = "https://api.pinata.cloud/data/pinList?status=pinned"
+    headers = {"Authorization": f"Bearer {jwt_token}"}
+
     try:
-        if 'personal_scores' in st.session_state:
-            return st.session_state.personal_scores
-        return {
-            'Mathematics': 13,  # Default values if not set
-            'Reading': 13,
-            'Science': 13,
-            'English': 13
-        }
-    except Exception:
-        return {
-            'Mathematics': 13,
-            'Reading': 13,
-            'Science': 13,
-            'English': 13
-        }
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        pinned_files = response.json()
 
-def calculate_subject_progress(responses):
+        sorted_files = sorted(
+            pinned_files.get('rows', []),
+            key=lambda x: x.get('date_pinned', ''),
+            reverse=True
+        )
+
+        all_questions = []
+        for row in sorted_files:  # Remove the 25 file limit to get all data
+            cid = row.get('ipfs_pin_hash')
+            content = get_file_content(cid)
+            if content:
+                if isinstance(content, list):
+                    all_questions.extend(content)
+                elif isinstance(content, dict):
+                    all_questions.append(content)
+
+        return process_questions(all_questions)
+
+    except Exception as e:
+        print(f"Error getting pinned questions: {e}")
+        return []
+
+def get_file_content(cid: str) -> Optional[Dict]:
+    """Get content of a file by CID."""
+    url = f"https://gateway.pinata.cloud/ipfs/{cid}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"Error getting file content for {cid}: {e}")
+        return None
+def calculate_score_change(question: Dict, current_score: float) -> float:
     """
-    Calculate cumulative progress for each subject based on difficulty.
-    Returns a DataFrame suitable for st.line_chart
-    Points system:
-    - Hard: +1.0
-    - Medium: +0.5
-    - Easy: +0.25
+    Calculate score change based on question difficulty and correctness.
+    Returns positive value for correct answers, negative for wrong answers.
     """
-    initial_scores = load_initial_scores()
-
-    # Initialize dictionary to store progress for each subject
-    subject_progress = {
-        'Math': [initial_scores['Mathematics']],
-        'Reading': [initial_scores['Reading']],
-        'Science': [initial_scores['Science']],
-        'English': [initial_scores['English']]
+    difficulty_map = {
+        'easy': 0.1,
+        'medium': 0.2,
+        'hard': 0.3
     }
-
-    # Define points for each difficulty level
-    difficulty_points = {
-        'Hard': 1.0,
-        'Medium': 0.5,
-        'Easy': 0.25
+    difficulty_multiplier = difficulty_map.get(question.get('difficulty', '').lower(), 0.2)
+    
+    # Base change calculation
+    growth_factor = 1 + ((abs(18-current_score)/175)) if current_score > 0 else 1
+    base_change = growth_factor * difficulty_multiplier * current_score
+    
+    # Explicitly handle correct vs incorrect
+    if question.get('correct', False):
+        return base_change  # Positive change for correct answer
+    else:
+        return -base_change  # Negative change for wrong answer
+def process_questions(questions: List[Dict]) -> List[Dict]:
+    """Process questions and track score progression."""
+    # Standardize subject names
+    subject_map = {
+        'Math': 'Mathematics',
+        'English': 'English',
+        'Science': 'Science',
+        'Reading': 'Reading'
     }
-
-    # Sort responses by timestamp
-    sorted_responses = sorted(responses, key=lambda x: datetime.strptime(x['timestamp'], "%Y-%m-%d %H:%M:%S"))
-
-    # Calculate cumulative progress
-    for response in sorted_responses:
-        subject = response['subject']
-        if subject in subject_progress:
-            # Only add points if the answer was correct
-            if response['correct']:
-                points = difficulty_points.get(response['difficulty'], 0)
-                new_value = subject_progress[subject][-1] + points
-                subject_progress[subject].append(new_value)
-            else:
-                # If incorrect, maintain the same value
-                subject_progress[subject].append(subject_progress[subject][-1])
-
-    # Convert to DataFrame for st.line_chart
-    # Find the maximum length among all subjects
-    max_len = max(len(values) for values in subject_progress.values())
-
-    # Pad shorter lists with their last value
-    for subject in subject_progress:
-        current_len = len(subject_progress[subject])
-        if current_len < max_len:
-            last_value = subject_progress[subject][-1]
-            subject_progress[subject].extend([last_value] * (max_len - current_len))
-
-    # Create DataFrame
-    df = pd.DataFrame(subject_progress)
-
-    return df
-
-
-def get_subject_statistics(responses):
-    """Calculate statistics for each subject."""
-    stats = {}
-    for subject in ['Math', 'Reading', 'Science', 'English']:
-        subject_responses = [r for r in responses if r['subject'] == subject]
-        total = len(subject_responses)
-        if total > 0:
-            correct = sum(1 for r in subject_responses if r['correct'])
-            accuracy = (correct / total * 100)
-            stats[subject] = {
-                'total': total,
-                'correct': correct,
-                'accuracy': accuracy
+    
+    # Initialize scores for each subject
+    current_scores = load_initial_scores()
+    subject_progressions = {subject: [score] for subject, score in current_scores.items()}
+    
+    processed_questions = []
+    
+    # Sort questions by timestamp
+    sorted_questions = sorted(
+        questions,
+        key=lambda x: x.get('timestamp', datetime.now().isoformat())
+    )
+    
+    # Process each question and track score changes
+    for q in sorted_questions:
+        try:
+            # Skip if missing critical data
+            if not q.get('subject') or not isinstance(q.get('correct'), bool):
+                continue
+                
+            # Map subject name
+            subject = subject_map.get(q.get('subject'), q.get('subject'))
+            if subject not in current_scores:
+                continue
+                
+            # Calculate new score
+            current_score = current_scores[subject]
+            score_change = calculate_score_change(q, current_score)
+            new_score = max(0, round(current_score + score_change, 2))
+            
+            # Update tracking
+            current_scores[subject] = new_score
+            subject_progressions[subject].append(new_score)
+            
+            # Store processed question with progression data
+            processed_q = {
+                'timestamp': q.get('timestamp', datetime.now().isoformat()),
+                'subject': subject,
+                'difficulty': q.get('difficulty', 'medium'),
+                'correct': q.get('correct', False),
+                'previous_score': current_score,
+                'new_score': new_score,
+                'score_change': score_change,
+                'subject_progression': list(subject_progressions[subject])  # Include full progression
             }
-        else:
-            stats[subject] = {'total': 0, 'correct': 0, 'accuracy': 0}
-    return stats
+            
+            processed_questions.append(processed_q)
+            
+        except Exception as e:
+            print(f"Error processing question: {e}")
+            continue
+            
+    return processed_questions
 
+def create_progression_graph(questions: List[Dict]):
+    """Create progression graph showing all score changes."""
+    if not questions:
+        st.warning("No questions data available to display.")
+        return
+        
+    # Prepare data for visualization
+    data_points = []
+    for subject in ['Mathematics', 'Reading', 'Science', 'English']:
+        progression = []
+        current_score = load_initial_scores()[subject]
+        progression.append({'Question': 0, 'Score': current_score, 'Subject': subject})
+        
+        subject_questions = [q for q in questions if q['subject'] == subject]
+        for i, q in enumerate(subject_questions, 1):
+            progression.append({
+                'Question': i,
+                'Score': q['new_score'],
+                'Subject': subject
+            })
+            
+        data_points.extend(progression)
+    
+    # Create DataFrame and plot
+    df = pd.DataFrame(data_points)
+    if not df.empty:
+        chart_data = df.pivot(index='Question', columns='Subject', values='Score')
+        st.line_chart(chart_data)
 
 def main():
-    st.markdown("# Learning Analytics")
-
-    # Add navigation button back to main page
-    if st.sidebar.button("← Back to Question Generator"):
-        st.switch_page("main.py")
-
-    # Load and process data
-    responses = load_question_responses()
-
-    if not responses:
-        st.warning("No question response data available yet. Complete some questions to see your progress!")
-        return
-
-    # Calculate progress and statistics
-    progress_df = calculate_subject_progress(responses)
-    subject_stats = get_subject_statistics(responses)
-
-    # Display the progress chart
-    st.markdown("### Learning Progress Over Time")
-    st.line_chart(progress_df)
-
-    st.markdown("""
-    **Points System:**
-    - Hard Questions: 1.0 points
-    - Medium Questions: 0.5 points
-    - Easy Questions: 0.25 points
-    """)
-
-    # Display overall statistics
-    st.markdown("### Overall Performance")
-    total_questions = len(responses)
-    correct_answers = sum(1 for r in responses if r['correct'])
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric("Total Questions", total_questions)
-    with col2:
-        st.metric("Correct Answers", correct_answers)
-    with col3:
-        accuracy = (correct_answers / total_questions * 100) if total_questions > 0 else 0
-        st.metric("Overall Accuracy", f"{accuracy:.1f}%")
-    with col4:
-        # Find subject with highest accuracy
-        best_subject = max(subject_stats.items(),
-                           key=lambda x: x[1]['accuracy'] if x[1]['total'] > 0 else -1)
-        st.metric("Strongest Subject",
-                  f"{best_subject[0]} ({best_subject[1]['accuracy']:.1f}%)"
-                  if best_subject[1]['total'] > 0 else "N/A")
-
-    # Display subject-wise statistics
-    st.markdown("### Subject-wise Performance")
-    subject_cols = st.columns(4)
-
-    for subject, col in zip(subject_stats.keys(), subject_cols):
-        with col:
-            st.markdown(f"**{subject}**")
-            stats = subject_stats[subject]
-            st.write(f"Questions: {stats['total']}")
-            st.write(f"Correct: {stats['correct']}")
-            st.write(f"Accuracy: {stats['accuracy']:.1f}%")
-
-    # Display recent activity
-    st.markdown("### Recent Activity")
-    if responses:
-        recent_df = pd.DataFrame(responses[-5:])  # Last 5 responses
-        recent_df['timestamp'] = pd.to_datetime(recent_df['timestamp'])
-        recent_df = recent_df[['timestamp', 'subject', 'difficulty', 'correct']]
-        recent_df = recent_df.sort_values('timestamp', ascending=False)
-        st.dataframe(recent_df, use_container_width=True)
-
+    st.title("Subject Progression Analysis")
+    
+    sample_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI4YmVmMTM1YS03NDY2LTQ1MjQtODhjMy00MGYzNzg2NmViZDciLCJlbWFpbCI6InNpbW9uZ2FnZTBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImZhNjUxNWZkOTRkMDMyZGQwN2QzIiwic2NvcGVkS2V5U2VjcmV0IjoiOWUyZTRiOTE4NDVjMDA4OWE3YzM0NDdhZDVhZDJkZTAyMTdkNGM5MjExOTI2ODEyZDZmMWRkMDlmYmU2ODA4NCIsImV4cCI6MTc2MzM1NzkxNH0.zpWQXD9YWbE6BKiBavUtGyZJJkrEiZ4x0j1zxzgpmJs"
+    
+    # Get and process questions
+    questions = get_pinata_questions(sample_token)
+    
+    # Display graph
+    st.subheader("Subject Score Progression")
+    create_progression_graph(questions)
+    
+    # Display statistics
+    st.subheader("Current Statistics")
+    cols = st.columns(4)
+    
+    # Group questions by subject
+    subject_stats = {}
+    for subject in ['Mathematics', 'Reading', 'Science', 'English']:
+        subject_qs = [q for q in questions if q['subject'] == subject]
+        if subject_qs:
+            initial_score = load_initial_scores()[subject]
+            final_score = subject_qs[-1]['new_score'] if subject_qs else initial_score
+            subject_stats[subject] = {
+                'current_score': final_score,
+                'change': final_score - initial_score,
+                'questions_count': len(subject_qs)
+            }
+        else:
+            subject_stats[subject] = {
+                'current_score': load_initial_scores()[subject],
+                'change': 0,
+                'questions_count': 0
+            }
+    
+    # Display metrics
+    for idx, subject in enumerate(['Mathematics', 'Reading', 'Science', 'English']):
+        stats = subject_stats[subject]
+        with cols[idx]:
+            st.metric(
+                label=subject,
+                value=f"{stats['current_score']:.1f}",
+                delta=f"{stats['change']:.1f}"
+            )
+            st.caption(f"Questions Answered: {stats['questions_count']}")
 
 if __name__ == "__main__":
+    st.set_page_config(
+        page_title="Subject Progression",
+        page_icon="📈",
+        layout="wide"
+    )
     main()

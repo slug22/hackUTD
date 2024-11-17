@@ -6,6 +6,74 @@ import logging
 import requests
 from typing import Dict, List
 from dotenv import load_dotenv
+import time
+import functools
+import logging
+from typing import Callable, Any
+from collections import defaultdict
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class FunctionTimer:
+    _timing_stats = defaultdict(lambda: {"calls": 0, "total_time": 0, "avg_time": 0, "min_time": float('inf'), "max_time": 0})
+    
+    @classmethod
+    def timer(cls, func: Callable) -> Callable:
+        """
+        Decorator to measure and log function execution time
+        """
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            start_time = time.time()
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                end_time = time.time()
+                execution_time = end_time - start_time
+                
+                # Update statistics
+                stats = cls._timing_stats[func.__name__]
+                stats["calls"] += 1
+                stats["total_time"] += execution_time
+                stats["avg_time"] = stats["total_time"] / stats["calls"]
+                stats["min_time"] = min(stats["min_time"], execution_time)
+                stats["max_time"] = max(stats["max_time"], execution_time)
+                
+                logger.info(
+                    f"Function '{func.__name__}' executed in {execution_time:.4f} seconds. "
+                    f"Avg: {stats['avg_time']:.4f}s, "
+                    f"Min: {stats['min_time']:.4f}s, "
+                    f"Max: {stats['max_time']:.4f}s, "
+                    f"Calls: {stats['calls']}"
+                )
+        
+        return wrapper
+    
+    @classmethod
+    def get_stats(cls) -> dict:
+        """
+        Return all collected timing statistics
+        """
+        return dict(cls._timing_stats)
+    
+    @classmethod
+    def print_stats(cls) -> None:
+        """
+        Print a summary of all function timing statistics
+        """
+        logger.info("\n=== Function Timing Statistics ===")
+        for func_name, stats in cls._timing_stats.items():
+            logger.info(
+                f"\nFunction: {func_name}\n"
+                f"Total calls: {stats['calls']}\n"
+                f"Total time: {stats['total_time']:.4f}s\n"
+                f"Average time: {stats['avg_time']:.4f}s\n"
+                f"Min time: {stats['min_time']:.4f}s\n"
+                f"Max time: {stats['max_time']:.4f}s"
+            )
 #from files import upload_question()
 
 # Load environment variables
@@ -18,27 +86,30 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 
+
+
 # Configure OpenAI client for SambaNova
+
 SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY", "cf134cde-f4d2-4e6d-90b4-500e269eb286")
 client = openai.OpenAI(
     api_key=SAMBANOVA_API_KEY,
     base_url="https://api.sambanova.ai/v1"
 )
 
-# Sample test data
-SAMPLE_USER_RESULTS = {
-    "English": 20,
-    "Mathematics": 11,
-    "Reading": 11,
-    "Science": 19
-}
+# # Sample test data
+# SAMPLE_USER_RESULTS = {
+#     "English": 20,
+#     "Mathematics": 11,
+#     "Reading": 11,
+#     "Science": 19
+# }
 
-SAMPLE_REGIONAL_RESULTS = {
-    "English": 15,
-    "Mathematics": 15,
-    "Reading": 15,
-    "Science": 15
-}
+# SAMPLE_REGIONAL_RESULTS = {
+#     "English": 15,
+#     "Mathematics": 15,
+#     "Reading": 15,
+#     "Science": 15
+# }
 
 SAMPLE_USA_RESULTS = {
     "English": 21,
@@ -48,139 +119,11 @@ SAMPLE_USA_RESULTS = {
 }
 # Add this HTML_TEMPLATE constant right after the sample data constants and before the functions
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>ACT Question Generator</title>
-    <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            max-width: 1000px; 
-            margin: 0 auto; 
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .form-group { 
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        textarea { 
-            width: 100%; 
-            height: 150px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-            margin-top: 5px;
-        }
-        button { 
-            padding: 10px 20px; 
-            background-color: #4CAF50; 
-            color: white; 
-            border: none; 
-            cursor: pointer;
-            border-radius: 4px;
-            font-size: 16px;
-            transition: background-color 0.3s;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .result { 
-            margin-top: 20px; 
-            white-space: pre-wrap;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1, h3 {
-            color: #333;
-        }
-        label {
-            font-weight: bold;
-            color: #555;
-        }
-        pre {
-            background-color: #f8f8f8;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-        }
-        .error {
-            color: #d32f2f;
-            background-color: #ffebee;
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 10px;
-        }
-        .info {
-            margin-bottom: 10px;
-            color: #666;
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-<body>
-    <h1>ACT Question Generator</h1>
-
-    <div class="form-group">
-        <h3>Generate with Sample Data</h3>
-        <div class="info">Test the generator with predefined sample scores</div>
-        <form action="/test-sample" method="post">
-            <button type="submit">Generate Sample Questions</button>
-        </form>
-    </div>
-
-    <div class="form-group">
-        <h3>Custom Test Data</h3>
-        <div class="info">Enter custom ACT scores to generate targeted practice questions</div>
-        <form action="/test-custom" method="post">
-            <label>User Results (JSON):</label><br>
-            <textarea name="user_results">{
-    "English": 21,
-    "Mathematics": 21,
-    "Reading": 21,
-    "Science": 21
-}</textarea><br><br>
-
-            <label>Regional Results (JSON):</label><br>
-            <textarea name="regional_results">{
-    "English": 21,
-    "Mathematics": 21,
-    "Reading": 21,
-    "Science": 21
-}</textarea><br><br>
-
-            <button type="submit">Generate Custom Questions</button>
-        </form>
-    </div>
-
-    {% if result %}
-    <div class="result">
-        <h3>Generated Questions:</h3>
-        <pre>{{ result }}</pre>
-    </div>
-    {% endif %}
-
-    {% if error %}
-    <div class="error">
-        {{ error }}
-    </div>
-    {% endif %}
-</body>
-</html>
-"""
-
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import requests
 
-
+@FunctionTimer.timer
 def get_pinata_questions(jwt_token: str) -> List[Dict]:
     """
     Retrieve the last 3 pinned questions from Pinata.
@@ -236,7 +179,7 @@ def get_pinata_questions(jwt_token: str) -> List[Dict]:
         print(f"Error getting pinned questions: {e}")
         return []
 
-
+@FunctionTimer.timer
 def get_file_content(cid: str) -> Optional[Dict]:
     """
     Get content of a specific file by CID.
@@ -265,6 +208,7 @@ def get_file_content(cid: str) -> Optional[Dict]:
     except Exception as e:
         print(f"Error getting file content for {cid}: {e}")
         return None
+@FunctionTimer.timer
 def generate_questions(user_results: Dict, regional_results: Dict) -> List[Dict]:
     jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiI4YmVmMTM1YS03NDY2LTQ1MjQtODhjMy00MGYzNzg2NmViZDciLCJlbWFpbCI6InNpbW9uZ2FnZTBAZ21haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsInBpbl9wb2xpY3kiOnsicmVnaW9ucyI6W3siZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiRlJBMSJ9LHsiZGVzaXJlZFJlcGxpY2F0aW9uQ291bnQiOjEsImlkIjoiTllDMSJ9XSwidmVyc2lvbiI6MX0sIm1mYV9lbmFibGVkIjpmYWxzZSwic3RhdHVzIjoiQUNUSVZFIn0sImF1dGhlbnRpY2F0aW9uVHlwZSI6InNjb3BlZEtleSIsInNjb3BlZEtleUtleSI6ImZhNjUxNWZkOTRkMDMyZGQwN2QzIiwic2NvcGVkS2V5U2VjcmV0IjoiOWUyZTRiOTE4NDVjMDA4OWE3YzM0NDdhZDVhZDJkZTAyMTdkNGM5MjExOTI2ODEyZDZmMWRkMDlmYmU2ODA4NCIsImV4cCI6MTc2MzM1NzkxNH0.zpWQXD9YWbE6BKiBavUtGyZJJkrEiZ4x0j1zxzgpmJs"
 
@@ -382,7 +326,7 @@ def generate_questions(user_results: Dict, regional_results: Dict) -> List[Dict]
                  "category": "Error",
                  "difficulty": "N/A"}]
 
-
+@FunctionTimer.timer
 def parse_unstructured_response(response_text: str) -> List[Dict]:
     """
     Enhanced fallback parser for unstructured text responses
@@ -445,46 +389,47 @@ def parse_unstructured_response(response_text: str) -> List[Dict]:
                                          "category": "Error", "difficulty": "N/A"}]
 
 
-@app.route('/')
-def test_interface():
-    """Test interface endpoint"""
-    return render_template_string(HTML_TEMPLATE)
+# @app.route('/')
+# def test_interface():
+#     """Test interface endpoint"""
+#     return render_template_string(HTML_TEMPLATE)
 
 
-@app.route('/test-sample', methods=['POST'])
-def test_with_sample():
-    """Test endpoint using sample data"""
-    try:
-        logger.info("Generating questions with sample data")
-        questions = generate_questions(SAMPLE_USER_RESULTS, SAMPLE_REGIONAL_RESULTS)
-        logger.debug(f"Generated questions: {questions}")
-        # Properly format the result as JSON string
-        result = json.dumps(questions, indent=2)
-        return render_template_string(HTML_TEMPLATE, result=result)
-    except Exception as e:
-        logger.error(f"Error in test_with_sample: {e}")
-        error_response = [{"error": str(e), "question": "Error occurred", "answer": "N/A",
-                           "explanation": str(e), "category": "Error", "difficulty": "N/A"}]
-        return render_template_string(HTML_TEMPLATE, result=json.dumps(error_response, indent=2))
+# @app.route('/test-sample', methods=['POST'])
+# def test_with_sample():
+#     """Test endpoint using sample data"""
+#     try:
+#         logger.info("Generating questions with sample data")
+#         questions = generate_questions(SAMPLE_USER_RESULTS, SAMPLE_REGIONAL_RESULTS)
+#         logger.debug(f"Generated questions: {questions}")
+#         # Properly format the result as JSON string
+#         result = json.dumps(questions, indent=2)
+#         return render_template_string(HTML_TEMPLATE, result=result)
+#     except Exception as e:
+#         logger.error(f"Error in test_with_sample: {e}")
+#         error_response = [{"error": str(e), "question": "Error occurred", "answer": "N/A",
+#                            "explanation": str(e), "category": "Error", "difficulty": "N/A"}]
+#         return render_template_string(HTML_TEMPLATE, result=json.dumps(error_response, indent=2))
 
 
-@app.route('/test-custom', methods=['POST'])
-def test_with_custom():
-    """Test endpoint using custom data"""
-    try:
-        # Safely parse JSON instead of using eval
-        user_results = json.loads(request.form['user_results'])
-        regional_results = json.loads(request.form['regional_results'])
-        questions = generate_questions(user_results, regional_results)
-        return render_template_string(HTML_TEMPLATE, result=json.dumps(questions, indent=2))
-    except Exception as e:
-        logger.error(f"Error in test_with_custom: {e}")
-        error_response = [{"error": str(e), "question": "Error occurred", "answer": "N/A",
-                           "explanation": str(e), "category": "Error", "difficulty": "N/A"}]
-        return render_template_string(HTML_TEMPLATE, result=json.dumps(error_response, indent=2))
+# @app.route('/test-custom', methods=['POST'])
+# def test_with_custom():
+#     """Test endpoint using custom data"""
+#     try:
+#         # Safely parse JSON instead of using eval
+#         user_results = json.loads(request.form['user_results'])
+#         regional_results = json.loads(request.form['regional_results'])
+#         questions = generate_questions(user_results, regional_results)
+#         return render_template_string(HTML_TEMPLATE, result=json.dumps(questions, indent=2))
+#     except Exception as e:
+#         logger.error(f"Error in test_with_custom: {e}")
+#         error_response = [{"error": str(e), "question": "Error occurred", "answer": "N/A",
+#                            "explanation": str(e), "category": "Error", "difficulty": "N/A"}]
+#         return render_template_string(HTML_TEMPLATE, result=json.dumps(error_response, indent=2))
 
 
 @app.route('/generate-questions', methods=['POST'])
+@FunctionTimer.timer
 def create_questions():
     """API endpoint to generate questions"""
     try:
@@ -513,6 +458,7 @@ def create_questions():
 
 
 @app.route('/health', methods=['GET'])
+@FunctionTimer.timer
 def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'})
@@ -520,3 +466,4 @@ def health_check():
 
 if __name__ == '__main__':
     app.run(debug=True)
+    FunctionTimer.print_stats()

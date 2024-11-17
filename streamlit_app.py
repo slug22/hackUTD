@@ -118,7 +118,7 @@ def display_question_card(question: Dict, index: int) -> None:
         question_text = question.get('question', '')
         options = question.get('options', {})
 
-        # Create a card layout for the question
+        # Start the card container but don't close it yet
         st.markdown(f"""
             <div style='
                 border: 2px solid rgba(255, 255, 255, 0.8);
@@ -126,10 +126,14 @@ def display_question_card(question: Dict, index: int) -> None:
                 padding: 1.5rem;
                 margin-bottom: 1rem;
                 background-color: rgba(255, 255, 255, 0.1);
+                height: 100%;
+                display: flex;
+                flex-direction: column;
             '>
-                <h3>Question {index + 1}</h3>
-                <p><strong>Category:</strong> {category} | 
-                <strong>Difficulty:</strong> {difficulty}</p>
+                <div style='flex-grow: 1;'>
+                    <h3>Question {index + 1}</h3>
+                    <p><strong>Category:</strong> {category} | 
+                    <strong>Difficulty:</strong> {difficulty}</p>
         """, unsafe_allow_html=True)
 
         # Display context if available
@@ -146,6 +150,12 @@ def display_question_card(question: Dict, index: int) -> None:
             answer_key = f"answer_{index}"
             choice = st.radio("Select your answer:", formatted_options, key=answer_key)
 
+            # Close the flex-grow div before the button
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Create a container for the button and feedback
+            st.markdown("<div style='margin-top: auto;'>", unsafe_allow_html=True)
+            
             # Submit button
             if st.button("Submit Answer", key=f"submit_{index}"):
                 correct_answer = question.get('correct_option')
@@ -160,16 +170,18 @@ def display_question_card(question: Dict, index: int) -> None:
 
                 # Save response data to JSON
                 save_response_to_json(category, difficulty, is_correct)
+
+            # Close the button container
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.error("Invalid question format")
 
-        # Close the div after all content is added
+        # Close the main card div
         st.markdown("</div>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error displaying question: {str(e)}")
         st.write("Raw question data:", question)
-
 
 def display_questions_grid(questions: List[Dict]) -> None:
     """Display questions in a responsive grid layout."""
@@ -227,26 +239,30 @@ def main():
     """Main application logic."""
     st.set_page_config(page_title="ACT Practice Questions", layout="wide")
 
-    # Custom CSS for the page
     st.markdown("""
-        <style>
-            div.stButton > button {
-                width: 100%;
-            }
-            .stSuccess, .stError, .stInfo {
-                margin: 1rem 0;
-            }
-            .header {
-                text-align: center;
-                color: #4CAF50;
-            }
-            .question-card {
-                background-color: rgba(255, 255, 255, 0.2);
-                border-radius: 10px;
-                padding: 20px;
-                margin-bottom: 20px;
-            }
-        </style>
+    <style>
+        div.stButton > button {
+            width: 100%;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        .stSuccess, .stError, .stInfo {
+            margin: 1rem 0;
+        }
+        .header {
+            text-align: center;
+            color: #4CAF50;
+        }
+        .question-card {
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 0px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+    </style>
     """, unsafe_allow_html=True)
 
     # Navigation buttons
